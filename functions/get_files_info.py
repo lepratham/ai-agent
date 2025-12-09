@@ -1,8 +1,5 @@
 import os
 from google.genai import types
-from write_file import schema_write_file
-from schema_get_file_content import schema_get_file_content
-from run_python_file import schema_run_python_file
 
 
 def get_files_info(working_directory, directory="."):
@@ -38,13 +35,4 @@ schema_get_files_info = types.FunctionDeclaration(
             ),
         },
     ),
-)
-
-available_functions = types.Tool(
-    function_declarations=[
-        schema_get_files_info,
-        schema_get_file_content,
-        schema_write_file,
-        schema_run_python_file,
-    ],
 )

@@ -19,6 +19,8 @@ def write_file(working_directory, file_path, content):
         return f"Error: {str(error)}"
 
 
+# Schema and available function definitions
+
 schema_write_file = types.FunctionDeclaration(
     name="write_file",
     description="Writes to files given a file path and content, constrained to the current working_directory.",

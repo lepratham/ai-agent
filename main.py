@@ -4,6 +4,7 @@ from google import genai
 import argparse
 from google.genai import types
 from config import system_prompt
+from call_function import call_function, available_functions
 
 # Loading API key
 load_dotenv()
@@ -21,105 +22,79 @@ parser.add_argument("--verbose", action="store_true", help="Enable verbose outpu
 args = parser.parse_args()
 # Now we can access `args.prompt`
 
-# Schema and available function definitions
-schema_get_files_info = types.FunctionDeclaration(
-    name="get_files_info",
-    description="Lists files in the specified directory along with their sizes, constrained to the working directory.",
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            "directory": types.Schema(
-                type=types.Type.STRING,
-                description="The directory to list files from, relative to the working directory. If not provided, lists files in the working directory itself.",
-            ),
-        },
-    ),
-)
-
-schema_run_python_file = types.FunctionDeclaration(
-    name="run_python_file",
-    description="Runs a python file with given file_path within the working directory, as well will given args.",
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            "file_path": types.Schema(
-                type=types.Type.STRING,
-                description="The file_path representes the name of the file within the working directory.",
-            ),
-        },
-    ),
-)
-
-schema_write_file = types.FunctionDeclaration(
-    name="write_file",
-    description="Writes to files given a file path and content, constrained to the current working_directory.",
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            "file_path": types.Schema(
-                type=types.Type.STRING,
-                description="The file_path representes the name of the file within the working directory. If the file does not exist the function will create a file matching the given file name.",
-            ),
-            "content": types.Schema(
-                type=types.Type.STRING,
-                description="The content to be added to the file given by file_path.",
-            ),
-        },
-    ),
-)
-
-schema_get_file_content = types.FunctionDeclaration(
-    name="get_file_content",
-    description="Reads contents of a file given by file_path. Will only read up to 10000 characters after which the text is truncated.",
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            "file_path": types.Schema(
-                type=types.Type.STRING,
-                description="The file_path representes the name of the file within the working directory.",
-            ),
-        },
-    ),
-)
-
-available_functions = types.Tool(
-    function_declarations=[
-        schema_get_files_info,
-        schema_get_file_content,
-        schema_write_file,
-        schema_run_python_file,
-    ],
-)
+messages = [types.Content(role="user", parts=[types.Part(text=args.prompt)])]
+prompt = messages
 
 
 def main():
-    messages = [types.Content(role="user", parts=[types.Part(text=args.prompt)])]
-    prompt = messages
+    try:
+        for _ in range(0, 20):
+            generated_content = generate_content(client, messages, args.verbose)
+            if not generated_content.candidates and generated_content.text:
+                break
+        print(generated_content.text)
+    except Exception as error:
+        return f"Error: {str(error)}"
+
+
+def generate_content(client, messages, verbose):
     response = client.models.generate_content(
         model="gemini-2.5-flash",
-        contents=prompt,
+        contents=messages,
         config=types.GenerateContentConfig(
             tools=[available_functions], system_instruction=system_prompt
         ),
     )
 
+    candidates = response.candidates
+    for candidate in candidates:
+        messages.append(candidate.content)
+
     if not response.usage_metadata:
         raise RuntimeError("Gemini API response appears to be malformed")
 
     # Instructions for --verbose flag
-    if args.verbose:
+    if verbose:
         print(f"User prompt: {args.prompt}")
         print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
         print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
 
-    if response.function_calls:
-        for function_call_part in response.function_calls:
-            print(
-                f"Calling function: {function_call_part.name}({function_call_part.args})"
-            )
-    else:
+    function_responses = []
+    if not response.function_calls:
         print("Response:")
-        print(response.text)
+        r = types.Content(
+            parts=[types.Part(text=response.text)],
+            role="user",
+        )
+        messages.append(r)
+
+    for function_call_part in response.function_calls:
+        function_call_result = call_function(function_call_part, verbose)
+
+        # validate structure
+        if (
+            not function_call_result.parts
+            or not function_call_result.parts[0].function_response
+        ):
+            raise Exception("empty function call result")
+
+        part = function_call_result.parts[0]
+
+        if verbose:
+            print(f"-> {part.function_response.response}")
+
+        function_responses.append(part)
+
+    if not function_responses:
+        raise Exception("no function responses generated, exiting.")
+
+    response_list = types.Content(
+        parts=function_responses,
+        role="user",
+    )
+
+    messages.append(response_list)
+    return response
 
 
 if __name__ == "__main__":
